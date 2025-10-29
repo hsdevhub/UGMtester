@@ -12,7 +12,7 @@ DATA_PATH = Path(__file__).parent / "questions.json"
 @st.cache_data
 def load_bank(path: Path):
     if not path.exists():
-        st.error("❌ No se encontró 'cuestionario.json' junto al script. Colócalo y recarga.")
+        st.error("❌ No se encontró 'questions.json' junto al script. Colócalo y recarga.")
         st.stop()
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -222,13 +222,13 @@ opts_map = {
 prev_answer = st.session_state.answers.get(q["n"], {})
 locked = (q["n"] in st.session_state.locked)
 
-# Radio options
+# Selector de respuesta
 choice = st.radio(
     "Elige una opción:",
-    options=["A","B","C"],
-    format_func=lambda k: f"{k}) {opts_map.get(k,'')}",
-    index=["A","B","C"].index(prev_answer.get("selected","A")) if prev_answer.get("selected") in {"A","B","C"} else 0,
-    disabled=locked and prev_answer.get("correct") is False  # si quedó bloqueada por 1 fallo, no deja cambiar
+    options=["A", "B", "C"],
+    format_func=lambda k: f"{k}) {opts_map.get(k, '')}",
+    index=["A", "B", "C"].index(prev_answer.get("selected", "A")) if prev_answer.get("selected") in {"A","B","C"} else 0,
+    disabled=(locked and not prev_answer.get("correct", False))
 )
 
 c_left, c_mid, c_right = st.columns([1,1,2])
@@ -238,44 +238,76 @@ with c_left:
         prev_question()
         st.rerun()
 
+# Deshabilita "Responder" si la pregunta está bloqueada por fallo
+# o si ya mostramos feedback para esta pregunta con la opción de mostrar-correcta activada
+responder_disabled = (locked and not prev_answer.get("correct", False))
+if st.session_state.show_correct_between:
+    fb_cur = st.session_state.last_feedback
+    if fb_cur and fb_cur.get("n") == q["n"]:
+        responder_disabled = True
+
 with c_mid:
-    submitted = st.button("Responder", use_container_width=True, disabled=(locked and not prev_answer.get("correct", False)))
+    submitted = st.button("Responder", use_container_width=True, disabled=responder_disabled)
 with c_right:
     if st.button("➡️ Siguiente", use_container_width=True):
+        # Al pasar de pregunta, limpiamos el feedback mostrado
+        st.session_state.last_feedback = None
         next_question()
         st.rerun()
+
+# --- Feedback UI persistente para la pregunta actual ---
+fb = st.session_state.last_feedback
+if fb and fb.get("n") == q["n"]:
+    if fb.get("kind") == "success":
+        st.success(fb.get("msg", "✅ Correcto"))
+    else:
+        st.error(fb.get("msg", "❌ Incorrecto"))
 
 if submitted:
     correct_letter = get_correct_letter(q)
     a = st.session_state.answers.get(q["n"], {"attempts": 0, "correct": False, "selected": None, "lote_id": q["lote_id"]})
-    # Si ya estaba correcto, solo avanzamos selección
+
+    # Si ya estaba correcta
     if a.get("correct", False):
         a["selected"] = choice
         st.session_state.answers[q["n"]] = a
         if st.session_state.show_correct_between:
-            st.success(f"✅ Ya estaba correcta. Respuesta correcta: {correct_letter}) {opts_map[correct_letter]}")
-        next_question()
-        st.rerun()
+            msg = f"✅ Ya estaba correcta. Respuesta correcta: {correct_letter}) {opts_map[correct_letter]}"
+            st.session_state.last_feedback = {"n": q["n"], "kind": "success", "msg": msg}
+            st.success(msg)
+            # No avanzamos automáticamente; el usuario pulsa ➡️ Siguiente
+        else:
+            next_question()
+            st.rerun()
+
     else:
-        # evaluar
+        # Evaluar intento
         a["attempts"] = a.get("attempts", 0) + 1
         a["selected"] = choice
+
         if choice == correct_letter:
             a["correct"] = True
             st.session_state.answers[q["n"]] = a
             if st.session_state.show_correct_between:
-                st.success(f"✅ Correcto. {correct_letter}) {opts_map[correct_letter]}")
-            next_question()
-            st.rerun()
+                msg = f"✅ Correcto. {correct_letter}) {opts_map[correct_letter]}"
+                st.session_state.last_feedback = {"n": q["n"], "kind": "success", "msg": msg}
+                st.success(msg)
+                # Sin avance automático
+            else:
+                next_question()
+                st.rerun()
         else:
-            # fallo
+            # Fallo: se bloquea tras un fallo y se muestra la correcta si así se eligió
             st.session_state.answers[q["n"]] = a
-            # Máximo un fallo → bloquear y pasar
             st.session_state.locked.add(q["n"])
             if st.session_state.show_correct_between:
-                st.error(f"❌ Incorrecto. Correcta: {correct_letter}) {opts_map[correct_letter]}")
-            next_question()
-            st.rerun()
+                msg = f"❌ Incorrecto. Correcta: {correct_letter}) {opts_map[correct_letter]}"
+                st.session_state.last_feedback = {"n": q["n"], "kind": "error", "msg": msg}
+                st.error(msg)
+                # Sin avance automático
+            else:
+                next_question()
+                st.rerun()
 
 # =========================
 # Footer: Quick Review Panel
